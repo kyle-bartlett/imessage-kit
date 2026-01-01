@@ -1,0 +1,8 @@
+{
+  "serverUrl": "YOUR_SUBDOMAIN.imsgd.photon.codes",
+  "logLevel": "info",
+  "notes": {
+    "setup": "Get your subdomain from daniel@photon.codes",
+    "example": "If your subdomain is 'kyle', use 'kyle.imsgd.photon.codes'"
+  }
+}
