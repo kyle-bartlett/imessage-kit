@@ -1,0 +1,89 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2026-01-08T00:00:00Z",
+
+  "scenario": {
+    "active": "available",
+    "presets": {
+      "available": {
+        "label": "Available",
+        "icon": "🟢",
+        "message": null,
+        "respondToAll": true,
+        "urgentOnly": false
+      },
+      "busy": {
+        "label": "Busy",
+        "icon": "🟡",
+        "message": "I'm a bit busy right now but I'll get back to you soon",
+        "respondToAll": true,
+        "urgentOnly": false
+      },
+      "dnd": {
+        "label": "Do Not Disturb",
+        "icon": "🔴",
+        "message": "I'm unavailable right now. I'll respond when I'm free.",
+        "respondToAll": false,
+        "urgentOnly": true
+      },
+      "driving": {
+        "label": "Driving",
+        "icon": "🚗",
+        "message": "I'm driving right now - I'll text you when I'm off the road",
+        "respondToAll": true,
+        "urgentOnly": false
+      },
+      "sleeping": {
+        "label": "Sleeping",
+        "icon": "😴",
+        "message": "I'm asleep - I'll get back to you in the morning",
+        "respondToAll": false,
+        "urgentOnly": true
+      },
+      "traveling": {
+        "label": "Traveling",
+        "icon": "✈️",
+        "message": "I'm traveling and may have limited connectivity",
+        "respondToAll": true,
+        "urgentOnly": false
+      }
+    },
+    "custom": {
+      "enabled": false,
+      "message": "",
+      "expiresAt": null
+    }
+  },
+
+  "tone": {
+    "casualLevel": 8,
+    "brevityLevel": 7,
+    "humorLevel": 6,
+    "emojiUsage": "moderate",
+    "matchEnergy": true,
+    "customPersonality": ""
+  },
+
+  "chats": {
+    "defaultEnabled": true,
+    "rules": {}
+  },
+
+  "contacts": {
+    "priority": [],
+    "blocked": []
+  },
+
+  "responseRules": {
+    "urgentKeywords": ["urgent", "emergency", "asap", "important", "help"],
+    "alwaysRespondKeywords": [],
+    "customInstructions": []
+  },
+
+  "settings": {
+    "botEnabled": true,
+    "groupChatsEnabled": true,
+    "directMessagesEnabled": true,
+    "apiLimitPerDay": 100
+  }
+}

@@ -25,11 +25,89 @@ import { IMessageSDK } from '../imessage-kit/dist/index.js'
 import { config } from 'dotenv'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { writeFileSync, readFileSync, existsSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync, watchFile } from 'fs'
 
 // Load environment variables
 const __dirname = dirname(fileURLToPath(import.meta.url))
 config({ path: resolve(__dirname, '.env') })
+
+// ============================================
+// CONTROLLER CONFIG (from bot-controller app)
+// ============================================
+interface ControllerConfig {
+  version: string
+  lastUpdated: string
+  scenario: {
+    active: string
+    presets: Record<string, {
+      label: string
+      icon: string
+      message: string | null
+      respondToAll: boolean
+      urgentOnly: boolean
+    }>
+    custom: {
+      enabled: boolean
+      message: string
+      expiresAt: string | null
+    }
+  }
+  tone: {
+    casualLevel: number
+    brevityLevel: number
+    humorLevel: number
+    emojiUsage: 'none' | 'minimal' | 'moderate' | 'frequent'
+    matchEnergy: boolean
+    customPersonality: string
+  }
+  chats: {
+    defaultEnabled: boolean
+    rules: Record<string, { enabled: boolean; customTone?: string; customInstructions?: string }>
+  }
+  contacts: {
+    priority: string[]
+    blocked: string[]
+  }
+  responseRules: {
+    urgentKeywords: string[]
+    alwaysRespondKeywords: string[]
+    customInstructions: string[]
+  }
+  settings: {
+    botEnabled: boolean
+    groupChatsEnabled: boolean
+    directMessagesEnabled: boolean
+    apiLimitPerDay: number
+  }
+}
+
+const CONFIG_FILE = resolve(__dirname, 'kyle-config.json')
+let controllerConfig: ControllerConfig | null = null
+
+function loadControllerConfig(): ControllerConfig | null {
+  try {
+    if (existsSync(CONFIG_FILE)) {
+      const data = readFileSync(CONFIG_FILE, 'utf-8')
+      controllerConfig = JSON.parse(data)
+      console.log('   📱 Controller config loaded:', controllerConfig?.scenario.active || 'unknown')
+      return controllerConfig
+    }
+  } catch (e) {
+    console.error('   ⚠️  Failed to load controller config:', e)
+  }
+  return null
+}
+
+// Load config on startup
+loadControllerConfig()
+
+// Watch for config changes
+if (existsSync(CONFIG_FILE)) {
+  watchFile(CONFIG_FILE, { interval: 2000 }, () => {
+    console.log('\n🔄 Config file changed, reloading...')
+    loadControllerConfig()
+  })
+}
 
 // ============================================
 // CONFIGURATION
@@ -102,6 +180,8 @@ const REMOTE_COMMANDS: Record<string, string> = {
   '!resume': 'Resume AI responses',
   '!status': 'Get current status',
   '!digest': 'Send immediate recap',
+  '!reload': 'Reload controller config',
+  '!scenario': 'Show current scenario',
   '!help': 'List commands'
 }
 
@@ -244,6 +324,28 @@ async function handleRemoteCommand(sdk: IMessageSDK, command: string): Promise<b
       await sendSelfText(sdk, helpMsg)
       return true
 
+    case '!reload':
+      loadControllerConfig()
+      if (controllerConfig) {
+        const scenario = controllerConfig.scenario.presets[controllerConfig.scenario.active]
+        await sendSelfText(sdk, `🔄 Config Reloaded!\n━━━━━━━━━━━━━━━━━━━━\n${scenario?.icon || '🟢'} ${scenario?.label || controllerConfig.scenario.active}\n🤖 Bot: ${controllerConfig.settings.botEnabled ? 'ON' : 'OFF'}\n💬 Groups: ${controllerConfig.settings.groupChatsEnabled ? 'ON' : 'OFF'}\n📱 DMs: ${controllerConfig.settings.directMessagesEnabled ? 'ON' : 'OFF'}`)
+      } else {
+        await sendSelfText(sdk, '⚠️ No config file found')
+      }
+      console.log('\n🔄 Config reloaded via remote command')
+      return true
+
+    case '!scenario':
+      if (controllerConfig) {
+        const scenario = controllerConfig.scenario.presets[controllerConfig.scenario.active]
+        const customMsg = controllerConfig.scenario.custom.enabled ? `\n📝 Custom: "${controllerConfig.scenario.custom.message}"` : ''
+        const toneDesc = `Casual: ${controllerConfig.tone.casualLevel}/10 | Brief: ${controllerConfig.tone.brevityLevel}/10 | Humor: ${controllerConfig.tone.humorLevel}/10`
+        await sendSelfText(sdk, `🎭 Current Scenario\n━━━━━━━━━━━━━━━━━━━━\n${scenario?.icon || '🟢'} ${scenario?.label || controllerConfig.scenario.active}${customMsg}\n\n🎨 Tone: ${toneDesc}\n📢 Emojis: ${controllerConfig.tone.emojiUsage}`)
+      } else {
+        await sendSelfText(sdk, '⚠️ No config loaded - using defaults')
+      }
+      return true
+
     default:
       return false
   }
@@ -251,6 +353,119 @@ async function handleRemoteCommand(sdk: IMessageSDK, command: string): Promise<b
 
 function isRemoteCommand(text: string): boolean {
   return text.trim().toLowerCase().startsWith('!')
+}
+
+// ============================================
+// CONFIG-BASED RESPONSE CHECKS
+// ============================================
+function shouldBotRespond(chatId: string, sender: string, isGroup: boolean, isUrgent: boolean): { respond: boolean; reason?: string } {
+  if (!controllerConfig) return { respond: true }  // No config = respond to all
+
+  // Master switch
+  if (!controllerConfig.settings.botEnabled) {
+    return { respond: false, reason: 'Bot disabled in config' }
+  }
+
+  // Check blocked contacts
+  if (controllerConfig.contacts.blocked.includes(sender)) {
+    return { respond: false, reason: 'Sender is blocked' }
+  }
+
+  // Check group/DM settings
+  if (isGroup && !controllerConfig.settings.groupChatsEnabled) {
+    return { respond: false, reason: 'Group chats disabled' }
+  }
+  if (!isGroup && !controllerConfig.settings.directMessagesEnabled) {
+    return { respond: false, reason: 'DMs disabled' }
+  }
+
+  // Check chat-specific rules
+  const chatRule = controllerConfig.chats.rules[chatId] || controllerConfig.chats.rules[sender]
+  if (chatRule && !chatRule.enabled) {
+    return { respond: false, reason: 'Chat disabled in rules' }
+  }
+
+  // Check scenario settings
+  const activeScenario = controllerConfig.scenario.presets[controllerConfig.scenario.active]
+  if (activeScenario?.urgentOnly && !isUrgent) {
+    return { respond: false, reason: 'Scenario is urgent-only mode' }
+  }
+
+  return { respond: true }
+}
+
+function getScenarioMessage(): string | null {
+  if (!controllerConfig) return null
+
+  // Custom message takes priority
+  if (controllerConfig.scenario.custom.enabled && controllerConfig.scenario.custom.message) {
+    // Check if custom message has expired
+    if (controllerConfig.scenario.custom.expiresAt) {
+      const expires = new Date(controllerConfig.scenario.custom.expiresAt)
+      if (expires < new Date()) {
+        return null  // Expired
+      }
+    }
+    return controllerConfig.scenario.custom.message
+  }
+
+  // Otherwise use scenario preset message
+  const activeScenario = controllerConfig.scenario.presets[controllerConfig.scenario.active]
+  return activeScenario?.message || null
+}
+
+function getToneInstructions(): string {
+  if (!controllerConfig) return ''
+
+  const tone = controllerConfig.tone
+  const instructions: string[] = []
+
+  // Casual level
+  if (tone.casualLevel >= 8) {
+    instructions.push('Be very casual and relaxed, use slang and abbreviations freely')
+  } else if (tone.casualLevel >= 5) {
+    instructions.push('Keep it casual but readable')
+  } else if (tone.casualLevel <= 3) {
+    instructions.push('Be more formal and professional in tone')
+  }
+
+  // Brevity level
+  if (tone.brevityLevel >= 8) {
+    instructions.push('Keep responses VERY short - 1 sentence max when possible')
+  } else if (tone.brevityLevel >= 5) {
+    instructions.push('Keep responses brief - 1-2 sentences')
+  } else if (tone.brevityLevel <= 3) {
+    instructions.push('You can be more detailed in responses')
+  }
+
+  // Humor level
+  if (tone.humorLevel >= 7) {
+    instructions.push('Be witty and include humor when appropriate')
+  } else if (tone.humorLevel <= 3) {
+    instructions.push('Keep it straightforward, less humor')
+  }
+
+  // Emoji usage
+  if (tone.emojiUsage === 'none') {
+    instructions.push('Do NOT use emojis')
+  } else if (tone.emojiUsage === 'minimal') {
+    instructions.push('Rarely use emojis')
+  } else if (tone.emojiUsage === 'frequent') {
+    instructions.push('Use emojis liberally')
+  }
+
+  // Custom personality
+  if (tone.customPersonality) {
+    instructions.push(tone.customPersonality)
+  }
+
+  // Custom instructions from rules
+  if (controllerConfig.responseRules.customInstructions.length > 0) {
+    instructions.push('\nAdditional instructions:')
+    controllerConfig.responseRules.customInstructions.forEach(i => instructions.push(`- ${i}`))
+  }
+
+  return instructions.length > 0 ? '\n\n## Current Tone Settings:\n' + instructions.join('\n') : ''
 }
 
 // ============================================
@@ -265,8 +480,10 @@ interface UrgencyResult {
 function detectUrgency(text: string, sender: string): UrgencyResult {
   const lowerText = text.toLowerCase()
 
-  for (const keyword of ALERT_KEYWORDS) {
-    if (lowerText.includes(keyword)) {
+  // Use config urgentKeywords if available, otherwise fall back to ALERT_KEYWORDS
+  const keywords = controllerConfig?.responseRules.urgentKeywords || ALERT_KEYWORDS
+  for (const keyword of keywords) {
+    if (lowerText.includes(keyword.toLowerCase())) {
       return { isUrgent: true, reason: `Contains "${keyword}"`, confidence: 'high' }
     }
   }
@@ -848,7 +1065,10 @@ async function getAIResponse(chatId: string, senderName: string, message: string
   }
 
   const calendarContext = getCalendarContext()
-  const systemPrompt = KYLE_SYSTEM_PROMPT.replace('{CALENDAR_CONTEXT}', calendarContext)
+  const toneInstructions = getToneInstructions()
+  const scenarioMsg = getScenarioMessage()
+  const scenarioContext = scenarioMsg ? `\n\n## Current Status:\nIf relevant, mention: "${scenarioMsg}"` : ''
+  const systemPrompt = KYLE_SYSTEM_PROMPT.replace('{CALENDAR_CONTEXT}', calendarContext) + toneInstructions + scenarioContext
 
   let responseText: string
 
@@ -1074,8 +1294,15 @@ async function main() {
   console.log(`║ ⏰ Recaps: ${RECAP_HOURS.map(h => h > 12 ? (h-12)+'pm' : h+'am').join(', ')}`)
   console.log(`║ 👨‍👩‍👧‍👦 Family groups: ${FAMILY_GROUPS.join(', ')}`)
   console.log(`║ 💰 Daily limit: ${DAILY_API_LIMIT}`)
+  if (controllerConfig) {
+    const scenario = controllerConfig.scenario.presets[controllerConfig.scenario.active]
+    console.log(`║ 📱 Controller: ${scenario?.icon || '🟢'} ${scenario?.label || controllerConfig.scenario.active}`)
+    console.log(`║    Bot: ${controllerConfig.settings.botEnabled ? 'ON' : 'OFF'} | Groups: ${controllerConfig.settings.groupChatsEnabled ? 'ON' : 'OFF'} | DMs: ${controllerConfig.settings.directMessagesEnabled ? 'ON' : 'OFF'}`)
+  } else {
+    console.log('║ 📱 Controller: Not configured (using defaults)')
+  }
   console.log('╠══════════════════════════════════════════════════════════════╣')
-  console.log('║ 🎮 REMOTE: !pause !resume !status !digest !help              ║')
+  console.log('║ 🎮 REMOTE: !pause !resume !status !reload !scenario !help    ║')
   console.log('║ 📅 AUTO-EVENTS: Event invites → Calendar (with confirmation) ║')
   console.log('║ 🚫 SMART SPAM: Content-based detection (not just sender)     ║')
   console.log('╚══════════════════════════════════════════════════════════════╝')
@@ -1195,6 +1422,16 @@ async function main() {
         return
       }
 
+      // ============================================
+      // CHECK CONTROLLER CONFIG
+      // ============================================
+      const respondCheck = shouldBotRespond(chatId, sender, false, urgency.isUrgent)
+      if (!respondCheck.respond) {
+        console.log(`   ⚙️  Config skip: ${respondCheck.reason}`)
+        addToDigest(sender, text, chatId, urgency.isUrgent, false, false)
+        return
+      }
+
       // Record when we started processing this message
       const processingStartTime = Date.now()
 
@@ -1286,6 +1523,14 @@ async function main() {
       // Check if bot is paused
       if (botPaused) {
         console.log('   ⏸️  Bot paused - logging only')
+        addToDigest(sender, text, chatId, urgency.isUrgent, false, true)
+        return
+      }
+
+      // Check controller config
+      const respondCheck = shouldBotRespond(chatId, sender, true, urgency.isUrgent)
+      if (!respondCheck.respond) {
+        console.log(`   ⚙️  Config skip: ${respondCheck.reason}`)
         addToDigest(sender, text, chatId, urgency.isUrgent, false, true)
         return
       }
